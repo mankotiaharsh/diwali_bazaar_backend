@@ -47,23 +47,27 @@ def test_health_and_config(client):
         "cashfree_mode": "sandbox",
         "payments_enabled": True,
         "receipts_enabled": False,
+        "item_prices": cfg["item_prices"],
     }
+    assert cfg["item_prices"]["dry-fruits"] == 10
+    assert cfg["item_prices"]["mithai:laddoo"] == 0 and cfg["item_prices"]["mithai:jalebi"] == 10
 
 
 def test_checkout_defaults_to_minimum_shagun(client, fake_cashfree, thali_body):
+    # thali_body: golden diya + moli (free), jalebi + kaju katli (Rs 10 each)
     data = _checkout(client, thali_body)
     assert data["order_id"].startswith("diwali_")
-    assert data["amount"] == "51"
+    assert (data["shagun"], data["items_total"], data["amount"]) == ("51", "20", "71")
     sent = fake_cashfree.created[0]
-    assert sent["amount_paise"] == 5100
+    assert sent["amount_paise"] == 7100
     assert sent["customer_phone"] == "9876543210"  # +91 and spaces stripped
     assert sent["customer_email"] == "priya@example.com"
 
 
 def test_sender_can_give_more(client, fake_cashfree, thali_body):
     data = _checkout(client, {**thali_body, "amount": 501})
-    assert data["amount"] == "501"
-    assert fake_cashfree.created[0]["amount_paise"] == 50100
+    assert data["amount"] == "521"
+    assert fake_cashfree.created[0]["amount_paise"] == 52100
 
 
 @pytest.mark.parametrize("amount", [1, 50, 10001, 0, -5])
@@ -98,7 +102,7 @@ def test_full_payment_flow_sends_one_receipt(client, fake_cashfree, thali_body, 
     assert sent_emails == []
 
     fake_cashfree.order_states[order_id] = "PAID"
-    fake_cashfree.order_amounts[order_id] = 101.0
+    fake_cashfree.order_amounts[order_id] = 121.0  # Rs 101 shagun + Rs 20 items
     paid = client.post("/api/thalis/verify", json={"order_id": order_id}).json()
     assert paid["status"] == "paid" and paid["share_path"] == f"/t/{paid['thali_id']}"
 
@@ -110,7 +114,8 @@ def test_full_payment_flow_sends_one_receipt(client, fake_cashfree, thali_body, 
 
     mail = sent_emails[0]
     assert mail["to"] == "priya@example.com"
-    assert "101.00" in mail["html"] and f"/t/{paid['thali_id']}" in mail["html"]
+    assert "121.00" in mail["html"] and f"/t/{paid['thali_id']}" in mail["html"]
+    assert "Jalebi" in mail["html"] and "Golden Deepak" in mail["html"] and "Free" in mail["html"]
     name, pdf = mail["attachments"][0]
     assert name.startswith("Invoice-DB-") and pdf.startswith(b"%PDF")
 
@@ -186,3 +191,21 @@ def test_production_config_warnings():
         backend_public_url="https://api.example.com", database_url="postgresql://u:p@h/db",
     )
     assert ok.config_warnings() == []
+
+
+def test_free_only_thali_costs_just_the_shagun(client, fake_cashfree, thali_body):
+    body = {**thali_body, "thali": {**thali_body["thali"], "items": ["diya", "pooja", "phool"],
+            "styles": {"diya": ["mitti"], "pooja": ["moli", "kalash"], "phool": ["genda", "gulab"]}}}
+    data = _checkout(client, body)
+    assert (data["items_total"], data["amount"]) == ("0", "51")
+
+
+def test_bill_uses_server_prices():
+    from app.pricing import bill_lines
+
+    content = {"items": ["dry-fruits", "sajavat", "chocolate"],
+               "styles": {"sajavat": ["kandil", "toran", "lights"], "chocolate": ["milk", "box"], "phool": ["kamal"]}}
+    assert [(line.name, line.price_paise) for line in bill_lines(content)] == [
+        ("Dry Fruits", 1000), ("Akash Kandil", 0), ("Toran", 0), ("Fairy Lights", 1000),
+        ("Milk Chocolate", 0), ("Gift Box", 1000),
+    ]  # phool isn't on the thali, so its kamal isn't billed

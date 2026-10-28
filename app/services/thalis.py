@@ -1,4 +1,4 @@
-"""Business logic: start a ₹51 checkout for a thali, and confirm payment with Cashfree."""
+"""Business logic: bill a thali (item prices + shagun), take payment with Cashfree, and confirm it."""
 
 import logging
 import secrets
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import Thali, ThaliStatus, utcnow
+from app.pricing import bill_lines
 from app.schemas import CheckoutRequest, CheckoutResponse
 from app.services.cashfree import CashfreeClient, CashfreeError
 
@@ -43,10 +44,13 @@ def resolve_amount_paise(settings: Settings, amount: int | None) -> int:
 async def start_checkout(
     session: AsyncSession, cashfree: CashfreeClient, settings: Settings, req: CheckoutRequest
 ) -> CheckoutResponse:
-    amount_paise = resolve_amount_paise(settings, req.amount)
+    shagun_paise = resolve_amount_paise(settings, req.amount)
     order_id = f"{settings.order_prefix}_{uuid4().hex[:24]}"
     public_id = await _new_public_id(session)
     content = req.thali.model_dump(by_alias=True)
+    lines = bill_lines(content)
+    items_paise = sum(line.price_paise for line in lines)
+    amount_paise = items_paise + shagun_paise
 
     order = await cashfree.create_order(
         order_id=order_id,
@@ -55,7 +59,7 @@ async def start_checkout(
         customer_name=req.thali.sender,
         customer_phone=req.phone,
         customer_email=req.email,
-        note=f"Diwali thali shagun from {req.thali.sender} to {req.thali.to}",
+        note=f"Diwali thali from {req.thali.sender} to {req.thali.to}",
         tags={"app": "diwali-bazaar", "thali": public_id},
         return_url=settings.payment_return_url,
         notify_url=settings.payment_notify_url,
@@ -74,6 +78,8 @@ async def start_checkout(
             sender_email=req.email,
             content=content,
             amount_paise=amount_paise,
+            shagun_paise=shagun_paise,
+            line_items=[line.as_dict() for line in lines],
             currency="INR",
             cf_order_id=str(order.get("cf_order_id") or "") or None,
         )
@@ -86,6 +92,8 @@ async def start_checkout(
         payment_session_id=order["payment_session_id"],
         cashfree_mode=settings.cashfree_env,
         amount=Decimal(amount_paise) / 100,
+        items_total=Decimal(items_paise) / 100,
+        shagun=Decimal(shagun_paise) / 100,
         currency="INR",
     )
 

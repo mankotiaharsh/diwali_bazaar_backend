@@ -36,12 +36,22 @@ class Receipt:
     recipient: str
     email: str
     phone: str
-    amount: str  # "101.00"
+    amount: str  # total paid, "121.00"
+    shagun: str
+    lines: tuple[tuple[str, str], ...]  # (item name, "10.00" or "Free")
     order_id: str
     payment_id: str
     method: str
     link: str
     support_email: str
+
+
+def _money(paise: int) -> str:
+    return f"{paise / 100:,.2f}"
+
+
+def _price(paise: int) -> str:
+    return "Free" if paise == 0 else _money(paise)
 
 
 def _as_ist(dt: datetime) -> datetime:
@@ -58,7 +68,10 @@ def build_receipt(thali: Thali, settings: Settings) -> Receipt:
         recipient=thali.recipient_name,
         email=thali.sender_email,
         phone=thali.sender_phone,
-        amount=f"{thali.amount_paise / 100:,.2f}",
+        amount=_money(thali.amount_paise),
+        # Thalis paid before item pricing existed have no breakdown: the whole amount was shagun.
+        shagun=_money(thali.amount_paise if thali.shagun_paise is None else thali.shagun_paise),
+        lines=tuple((str(line["name"]), _price(int(line["price_paise"]))) for line in thali.line_items or []),
         order_id=thali.order_id,
         payment_id=thali.cf_payment_id or "—",
         method=METHOD_LABELS.get(thali.payment_method or "", (thali.payment_method or "Online").replace("_", " ").title()),
@@ -125,9 +138,13 @@ def build_invoice_pdf(r: Receipt) -> bytes:
     pdf.cell(20, 9, "Qty", align="C", fill=True)
     pdf.cell(40, 9, "Amount (INR)  ", align="R", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(w - 60, 10, _latin1(f"  Diwali thali shagun for {r.recipient}"))
-    pdf.cell(20, 10, "1", align="C")
-    pdf.cell(40, 10, f"{r.amount}  ", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    for name, price in r.lines:
+        pdf.cell(w - 60, 8, _latin1(f"  {name}"))
+        pdf.cell(20, 8, "1", align="C")
+        pdf.cell(40, 8, f"{price}  ", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(w - 60, 9, _latin1(f"  Shagun for {r.recipient}"))
+    pdf.cell(20, 9, "1", align="C")
+    pdf.cell(40, 9, f"{r.shagun}  ", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_draw_color(230, 210, 180)
     pdf.line(18, pdf.get_y(), 18 + w, pdf.get_y())
     pdf.set_font("Helvetica", "B", 11)
@@ -156,7 +173,17 @@ def build_invoice_pdf(r: Receipt) -> bytes:
 
 
 def build_email(r: Receipt) -> tuple[str, str, str]:
-    e = {k: html.escape(v) for k, v in r.__dict__.items()}
+    e = {k: html.escape(v) for k, v in r.__dict__.items() if isinstance(v, str)}
+    bill_rows = "".join(
+        f'<tr><td style="padding:5px 0;color:#3b1d0f">{html.escape(name)}</td>'
+        f'<td style="padding:5px 0;text-align:right;color:{"#16a34a" if price == "Free" else "#3b1d0f"}">'
+        f'{"Free" if price == "Free" else "₹" + price}</td></tr>'
+        for name, price in r.lines
+    )
+    bill_rows += (
+        f'<tr><td style="padding:5px 0;color:#3b1d0f">Shagun for {e["recipient"]}</td>'
+        f'<td style="padding:5px 0;text-align:right;color:#3b1d0f">₹{e["shagun"]}</td></tr>'
+    )
     subject = f"Your Diwali thali for {r.recipient} is ready - receipt {r.invoice_no}"
     rows = "".join(
         f'<tr><td style="padding:6px 0;color:#8a5a3c">{label}</td>'
@@ -187,12 +214,16 @@ def build_email(r: Receipt) -> tuple[str, str, str]:
   <tr><td style="padding:28px">
     <p style="margin:0 0 8px;font-size:18px;color:#3b1d0f">Thank you, {e["sender"]}!</p>
     <p style="margin:0 0 20px;font-size:15px;color:#3b1d0f;line-height:1.5">
-      We received your shagun of <b>₹{e["amount"]}</b>. Your Diwali thali for <b>{e["recipient"]}</b> is ready to share.
+      We received your payment of <b>₹{e["amount"]}</b>. Your Diwali thali for <b>{e["recipient"]}</b> is ready to share.
     </p>
     <p style="margin:0 0 24px;text-align:center">
       <a href="{e["link"]}" style="display:inline-block;background:#5b21b6;color:#ffffff;text-decoration:none;font-weight:bold;padding:12px 24px;border-radius:999px">Open your thali link</a>
     </p>
     <p style="margin:0 0 20px;font-size:13px;color:#8a5a3c;text-align:center;word-break:break-all">{e["link"]}</p>
+    <p style="margin:0 0 6px;font-weight:bold;color:#5b21b6">Your thali</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;margin-bottom:16px">
+      {bill_rows}
+    </table>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;border-top:1px solid #f3e8d5;border-bottom:1px solid #f3e8d5">
       {rows}
       <tr><td style="padding:10px 0;font-weight:bold;color:#3b1d0f">Total paid</td>
@@ -209,8 +240,10 @@ def build_email(r: Receipt) -> tuple[str, str, str]:
 </body></html>"""
     text = (
         f"Thank you, {r.sender}!\n\n"
-        f"We received your shagun of Rs. {r.amount}. Your Diwali thali for {r.recipient} is ready:\n{r.link}\n\n"
-        f"Invoice no.: {r.invoice_no}\nDate: {r.paid_on}\nOrder ID: {r.order_id}\n"
+        f"We received your payment of Rs. {r.amount}. Your Diwali thali for {r.recipient} is ready:\n{r.link}\n\n"
+        + "".join(f"{name}: {'Free' if price == 'Free' else 'Rs. ' + price}\n" for name, price in r.lines)
+        + f"Shagun for {r.recipient}: Rs. {r.shagun}\n\n"
+        + f"Invoice no.: {r.invoice_no}\nDate: {r.paid_on}\nOrder ID: {r.order_id}\n"
         f"Payment ID: {r.payment_id}\nPayment method: {r.method}\nTotal paid: Rs. {r.amount}\n\n"
         "Your invoice is attached as a PDF.\n"
         + (f"Questions? Write to {r.support_email}.\n" if r.support_email else "")

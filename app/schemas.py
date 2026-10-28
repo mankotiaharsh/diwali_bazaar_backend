@@ -45,7 +45,7 @@ class CheckoutRequest(BaseModel):
     thali: ThaliContent
     phone: str = Field(description="Sender's mobile number — Cashfree requires one on every order")
     email: EmailStr = Field(max_length=254, description="Where the receipt and invoice are sent")
-    # Whole rupees. Omit for the minimum shagun; limits are checked against server settings.
+    # Shagun in whole rupees (item prices are added on top by the server). Omit for the minimum.
     amount: int | None = Field(default=None, ge=1)
 
     @field_validator("email")
@@ -70,7 +70,9 @@ class CheckoutResponse(BaseModel):
     order_id: str
     payment_session_id: str
     cashfree_mode: Literal["sandbox", "production"]
-    amount: Decimal
+    amount: Decimal  # total charged = items + shagun
+    items_total: Decimal
+    shagun: Decimal
     currency: str
 
 
@@ -102,3 +104,5 @@ class PublicConfig(BaseModel):
     cashfree_mode: Literal["sandbox", "production"]
     payments_enabled: bool
     receipts_enabled: bool
+    # Whole rupees per "item" or "item:design" key; anything missing is free.
+    item_prices: dict[str, int]

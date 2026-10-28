@@ -12,6 +12,7 @@ from app.schemas import (
     VerifyRequest,
     VerifyResponse,
 )
+from app.pricing import public_prices
 from app.services import receipts, thalis
 
 router = APIRouter(prefix="/api", tags=["Thalis"])
@@ -29,6 +30,7 @@ async def public_config(settings: SettingsDep) -> PublicConfig:
         cashfree_mode=settings.cashfree_env,
         payments_enabled=settings.cashfree_enabled,
         receipts_enabled=settings.emails_enabled,
+        item_prices=public_prices(),
     )
 
 

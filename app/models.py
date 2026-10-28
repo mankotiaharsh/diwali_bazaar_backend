@@ -35,8 +35,11 @@ class Thali(Base):
     # Everything the recipient sees: names, items, chosen designs and the note.
     content: Mapped[dict[str, Any]] = mapped_column(JSON)
 
-    # Stored in paise to avoid floating-point money.
+    # Stored in paise to avoid floating-point money. amount = item prices + shagun (what Cashfree charged).
     amount_paise: Mapped[int] = mapped_column(Integer)
+    shagun_paise: Mapped[int | None] = mapped_column(Integer)
+    # The bill as charged: [{key, name, price_paise}, ...] — kept so receipts match even if prices change later.
+    line_items: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
 
     cf_order_id: Mapped[str | None] = mapped_column(String(64))

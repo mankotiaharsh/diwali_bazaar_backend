@@ -39,13 +39,14 @@ class FakeCashfree(CashfreeClient):
     async def create_order(self, **kw):
         self.created.append(kw)
         self.order_states[kw["order_id"]] = "ACTIVE"
+        self.order_amounts.setdefault(kw["order_id"], kw["amount_paise"] / 100)
         return {"order_id": kw["order_id"], "cf_order_id": 12345, "payment_session_id": f"session_{kw['order_id']}"}
 
     async def get_order(self, order_id):
         return {
             "order_id": order_id,
             "order_status": self.order_states[order_id],
-            "order_amount": self.order_amounts.get(order_id, 51.0),
+            "order_amount": self.order_amounts[order_id],
             "order_currency": "INR",
         }
 
