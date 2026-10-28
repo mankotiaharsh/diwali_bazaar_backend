@@ -24,8 +24,8 @@ async def lifespan(app: FastAPI):
         logger.info("Cashfree ready (%s mode), shagun ₹%s", settings.cashfree_env, settings.shagun_amount)
     else:
         logger.warning("Cashfree credentials missing — checkout will return 503 until they are set")
-    if not settings.payment_notify_url:
-        logger.info("BACKEND_PUBLIC_URL is not https — Cashfree webhooks are off (fine for local development)")
+    for warning in settings.config_warnings():
+        logger.warning("Config: %s", warning)
     yield
     await app.state.cashfree.aclose()
     await engine.dispose()
@@ -55,6 +55,9 @@ async def cashfree_error_handler(_: Request, exc: CashfreeError) -> JSONResponse
     logger.error("Cashfree error (status=%s): %s", exc.status_code, exc)
     if not exc.configured:
         return JSONResponse(status_code=503, content={"detail": "Payments are not set up yet."})
+    if settings.app_env == "development":
+        # Locally, show Cashfree's actual reason to speed up debugging.
+        return JSONResponse(status_code=502, content={"detail": f"Cashfree: {exc}"})
     return JSONResponse(
         status_code=502,
         content={"detail": "The payment service is unavailable right now. Please try again in a moment."},
@@ -83,5 +86,6 @@ async def health() -> JSONResponse:
         "status": "ok" if db == "ok" else "degraded",
         "database": db,
         "cashfree": settings.cashfree_env if settings.cashfree_enabled else "not configured",
+        "config_warnings": settings.config_warnings(),
     }
     return JSONResponse(status_code=200 if db == "ok" else 503, content=body)

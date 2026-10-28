@@ -104,6 +104,29 @@ class Settings(BaseSettings):
         # Cashfree replaces {order_id} itself when it redirects back.
         return f"{self.frontend_base_url}/payment/return?order_id={{order_id}}"
 
+    def config_warnings(self) -> list[str]:
+        """Setup problems worth fixing. Never includes secret values, so it's safe to show on /health."""
+        warnings = []
+        live = self.cashfree_env == "production"
+        if not self.cashfree_enabled:
+            warnings.append("CASHFREE_APP_ID / CASHFREE_SECRET_KEY are not set — payments are off.")
+        if live and not self.frontend_base_url.startswith("https://"):
+            warnings.append(
+                f"FRONTEND_BASE_URL is '{self.frontend_base_url}'. Cashfree production only accepts https return URLs, "
+                "so every checkout fails. Set it to your live site, e.g. https://diwali-bazaar.vercel.app"
+            )
+        if self.frontend_base_url not in self.cors_origin_list:
+            warnings.append(f"FRONTEND_BASE_URL '{self.frontend_base_url}' is not in CORS_ORIGINS.")
+        if live and not self.payment_notify_url:
+            warnings.append("BACKEND_PUBLIC_URL is not an https URL — Cashfree webhooks are off.")
+        if live and self.database_url.startswith("sqlite"):
+            warnings.append("DATABASE_URL is SQLite — on most hosts it is wiped on redeploy. Use Postgres.")
+        if live and self.app_env != "production":
+            warnings.append("APP_ENV is not 'production' while taking real payments (API docs are public).")
+        if not self.emails_enabled:
+            warnings.append("RESEND_API_KEY is not set — receipt emails are only logged.")
+        return warnings
+
     @property
     def payment_notify_url(self) -> str | None:
         # Cashfree only accepts https webhook URLs, so skip it for local http development.

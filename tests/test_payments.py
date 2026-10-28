@@ -34,7 +34,9 @@ def sent_emails(monkeypatch):
 
 
 def test_health_and_config(client):
-    assert client.get("/health").json()["status"] == "ok"
+    health = client.get("/health").json()
+    assert health["status"] == "ok"
+    assert any("RESEND_API_KEY" in w for w in health["config_warnings"])
     cfg = client.get("/api/config").json()
     assert cfg == {
         "amount": "51",
@@ -165,3 +167,22 @@ def test_webhook_rejects_bad_signature(client):
 def test_webhook_ignores_other_projects_orders(client):
     raw, headers = _signed({"data": {"order": {"order_id": "don_user_123"}}})
     assert client.post("/api/webhooks/cashfree", content=raw, headers=headers).json() == {"status": "ignored"}
+
+
+def test_production_config_warnings():
+    from app.config import Settings
+
+    s = Settings(
+        _env_file=None, cashfree_env="production", cashfree_app_id="x", cashfree_secret_key="y",
+        frontend_base_url="http://localhost:5173", database_url="sqlite+aiosqlite:///x.db",
+    )
+    text = " ".join(s.config_warnings())
+    assert "https return URLs" in text and "SQLite" in text and "webhooks are off" in text
+
+    ok = Settings(
+        _env_file=None, app_env="production", cashfree_env="production", cashfree_app_id="x",
+        cashfree_secret_key="y", resend_api_key="k",
+        frontend_base_url="https://diwali-bazaar.vercel.app", cors_origins="https://diwali-bazaar.vercel.app",
+        backend_public_url="https://api.example.com", database_url="postgresql://u:p@h/db",
+    )
+    assert ok.config_warnings() == []
